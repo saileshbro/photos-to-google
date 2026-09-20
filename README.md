@@ -60,6 +60,39 @@ ptg upload --dry-run ~/export -r        # list what would go, upload nothing
 `ptg` never prompts. It reads stdin when given `-`, or when stdin is not a
 terminal, so it behaves the same inside a script, a pipeline or an agent.
 
+## The Photos library as a source
+
+```sh
+ptg photos list --from 2025-10-01 --live       # what the library holds
+ptg photos list --paths --video | ptg upload - # originals, straight up
+ptg photos export ~/export --from 2025-01-01 | ptg upload -
+```
+
+`photos list` reads a copy of the library database, so it works while Photos is
+open. It lists what Photos itself counts: no hidden items, nothing in Recently
+Deleted, no unpicked burst frames.
+
+`photos export` runs [osxphotos](https://github.com/RhetTbull/osxphotos) and
+prints the path of every file written. Each item exports as its original; an
+edited item also exports its edit, and a Live Photo also exports its video. The
+date Photos shows is written into each file, so Google Photos dates the item by
+when it was taken rather than when it was uploaded. Re-running skips what is
+already there, so an interrupted export is safe to repeat.
+
+Export, then upload, because upload pairs a Live Photo back into one item from
+the two files export wrote.
+
+## Watching a long run
+
+```sh
+ptg upload ~/export -r --serve :8765
+```
+
+The run prints the page's URL on your network, so it can be opened on a phone.
+It shows items and bytes done, transfer rate and time left, what each thread is
+sending, and every failure. The page is read-only: there is nothing on it that
+can disturb the run.
+
 ## Live Photos
 
 A Live Photo is one item, not a photo next to a two-second video. `ptg` matches
@@ -98,7 +131,7 @@ one.
   (see `NOTICE`), which implements the Google Photos mobile upload protocol
 - `reference-python` — the scripts from the first full run, kept for reference
 
-## Status
+## Requirements
 
-`auth` and `upload` are done. Next: `ptg photos list` and `ptg photos export`
-(the macOS Photos library as a source) and `ptg serve` (the live progress page).
+Go 1.27 to build. `ptg photos export` needs osxphotos and exiftool; nothing else
+does.

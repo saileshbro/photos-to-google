@@ -41,6 +41,7 @@ type uploadOptions struct {
 	skipIncomplete bool
 	updateToLive   bool
 	dateFromName   bool
+	serve          string
 }
 
 func newUploadCommand() *cobra.Command {
@@ -97,6 +98,7 @@ Examples:
 	f.BoolVar(&o.skipIncomplete, "skip-incomplete-live-photos", false, "skip a Live Photo whose other half is missing instead of uploading it alone")
 	f.BoolVar(&o.updateToLive, "update-existing-to-live", true, "attach a video to a still already in Google Photos")
 	f.BoolVar(&o.dateFromName, "date-from-filename", false, "take the date from the filename (e.g. 20240709_182027.jpg)")
+	f.StringVar(&o.serve, "serve", "", "serve a live progress page on this address (e.g. :8765, reachable from a phone)")
 	return cmd
 }
 
@@ -184,11 +186,21 @@ func runUpload(cmd *cobra.Command, paths []string, o uploadOptions) error {
 		return AuthError{fmt.Errorf("%w — run: ptg auth login --clipboard", err)}
 	}
 
+	state := newProgressState()
+	if o.serve != "" {
+		url, err := serveProgress(o.serve, state)
+		if err != nil {
+			return err
+		}
+		out.progress(map[string]any{"event": "serving", "url": url}, "progress page: "+url)
+	}
+
 	totals := map[string]int{}
 	var failedPaths []string
 	pass := 0
 	for {
-		results, interrupted := uploadPass(out, paths, opts, pass)
+		state.setPass(pass)
+		results, interrupted := uploadPass(out, state, paths, opts, pass)
 		failedPaths = nil
 		for _, r := range results {
 			status, detail := classify(r)
@@ -221,6 +233,7 @@ func runUpload(cmd *cobra.Command, paths []string, o uploadOptions) error {
 		paths, opts.Recursive = failedPaths, false
 	}
 
+	state.finish()
 	out.summary(map[string]any{"event": "summary", "uploaded": totals[statusUploaded], "exists": totals[statusExists],
 		"skipped": totals[statusSkipped], "failed": totals[statusFailed]},
 		fmt.Sprintf("%d uploaded, %d already there, %d skipped, %d failed",
@@ -235,8 +248,8 @@ var errInterrupted = fmt.Errorf("interrupted")
 
 // uploadPass runs one upload of paths and returns every result. The upload
 // itself is asynchronous inside core, so this waits for UploadStop.
-func uploadPass(out *emitter, paths []string, opts core.UploadOptions, pass int) ([]core.FileUploadResult, bool) {
-	rep := &collector{out: out, pass: pass, done: make(chan struct{}), started: time.Now()}
+func uploadPass(out *emitter, state *progressState, paths []string, opts core.UploadOptions, pass int) ([]core.FileUploadResult, bool) {
+	rep := &collector{out: out, state: state, pass: pass, done: make(chan struct{}), started: time.Now()}
 	mgr := core.NewUploadManager(rep, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	sig := make(chan os.Signal, 1)
@@ -299,6 +312,7 @@ func backoffFor(results []core.FileUploadResult, pass int) time.Duration {
 // collector turns core's reporter callbacks into result lines and progress.
 type collector struct {
 	out     *emitter
+	state   *progressState
 	pass    int
 	started time.Time
 
@@ -317,6 +331,7 @@ func (c *collector) UploadStart(b core.UploadBatchStart) {
 	c.mu.Lock()
 	c.total, c.totalBytes = b.Total, b.TotalBytes
 	c.mu.Unlock()
+	c.state.setBatch(b.Total, b.TotalBytes)
 }
 
 func (c *collector) UploadStop() { c.closeOnce.Do(func() { close(c.done) }) }
@@ -325,12 +340,14 @@ func (c *collector) TotalBytes(n int64) {
 	c.mu.Lock()
 	c.totalBytes = n
 	c.mu.Unlock()
+	c.state.setBatch(c.total, n)
 }
 
 func (c *collector) TotalBytesDelta(d int64) {
 	c.mu.Lock()
 	c.totalBytes += d
 	c.mu.Unlock()
+	c.state.addBytes(d)
 }
 
 func (c *collector) Warning(w core.PreflightWarning) {
@@ -341,6 +358,7 @@ func (c *collector) Warning(w core.PreflightWarning) {
 // ThreadStatus arrives many times per file; it is throttled to one progress
 // line every two seconds so a piped run is not drowned in it.
 func (c *collector) ThreadStatus(t core.ThreadStatus) {
+	c.state.setThread(t)
 	c.mu.Lock()
 	if time.Since(c.lastTick) < 2*time.Second {
 		c.mu.Unlock()
@@ -362,6 +380,8 @@ func (c *collector) FileResult(r core.FileUploadResult) {
 	c.mu.Unlock()
 
 	status, detail := classify(r)
+	c.state.addResult(resultRecord{Status: status, Path: r.Path, Detail: detail, Paths: r.Paths,
+		Pass: c.pass, At: time.Now().Unix()})
 	rec := map[string]any{"event": "result", "status": status, "path": r.Path, "pass": c.pass,
 		"live_photo": r.IsLivePhoto}
 	line := []string{status, r.Path, detail}

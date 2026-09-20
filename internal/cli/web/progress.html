@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ptg — upload progress</title>
+<style>
+  :root { color-scheme: light dark; --ok:#2e9d57; --bad:#d64545; --run:#2f7de1; --line:#8883; }
+  body { font: 14px/1.45 -apple-system, system-ui, sans-serif; margin: 20px; max-width: 900px; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  .muted { color: #888; }
+  .cards { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 96px; }
+  .card b { display: block; font-size: 20px; }
+  .bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin: 4px 0 14px; }
+  .bar i { display: block; height: 100%; background: var(--ok); transition: width .5s; }
+  table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  td, th { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
+  .pill { border-radius: 9px; padding: 1px 8px; font-size: 12px; color: #fff; }
+  .uploaded { background: var(--ok); } .failed { background: var(--bad); }
+  .exists, .skipped { background: #777; }
+  .err { color: var(--bad); }
+  h2 { font-size: 14px; margin: 18px 0 2px; }
+  code { font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>Uploading to Google Photos</h1>
+<div class="muted" id="sub">connecting…</div>
+
+<div id="itemsTxt"></div>
+<div class="bar"><i id="itemsBar"></i></div>
+<div id="bytesTxt"></div>
+<div class="bar"><i id="bytesBar"></i></div>
+
+<div class="cards" id="cards"></div>
+
+<h2>In flight</h2>
+<table id="threads"></table>
+
+<h2>Failures <span class="muted" id="failCount"></span></h2>
+<table id="failures"></table>
+
+<h2>Latest results</h2>
+<table id="recent"></table>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const gb = b => (b / 1e9).toFixed(2) + " GB";
+const pct = (a, b) => b ? 100 * a / b : 0;
+const base = p => String(p).split("/").pop();
+let history = [];
+
+function rows(el, list, render) {
+  el.innerHTML = list.map(render).join("") || `<tr><td class="muted">none</td></tr>`;
+}
+
+async function poll() {
+  let d;
+  try {
+    d = await (await fetch("progress.json", {cache: "no-store"})).json();
+  } catch (e) {
+    $("sub").textContent = "lost contact with ptg — the run may have finished";
+    return setTimeout(poll, 4000);
+  }
+  const done = d.done, total = d.total || done;
+  $("itemsTxt").textContent = `${done.toLocaleString()} / ${total.toLocaleString()} items`;
+  $("itemsBar").style.width = pct(done, total) + "%";
+
+  history.push([d.now, d.bytes_done]);
+  history = history.filter(h => d.now - h[0] < 300);
+  const rate = history.length > 1
+    ? (history.at(-1)[1] - history[0][1]) / Math.max(1, history.at(-1)[0] - history[0][0]) : 0;
+  const left = Math.max(0, d.bytes_total - d.bytes_done);
+  const eta = rate > 0 ? ` · ${(left / rate / 3600).toFixed(1)} h left at ${(rate / 1e6).toFixed(1)} MB/s` : "";
+  $("bytesTxt").textContent = `${gb(d.bytes_done)} / ${gb(d.bytes_total)}${eta}`;
+  $("bytesBar").style.width = pct(d.bytes_done, d.bytes_total) + "%";
+
+  const mins = Math.floor(d.elapsed / 60);
+  $("sub").textContent = d.finished
+    ? `finished after ${mins} min`
+    : `running for ${mins} min${d.pass > 0 ? ` · retry pass ${d.pass}` : ""}`;
+
+  $("cards").innerHTML = ["uploaded", "exists", "skipped", "failed"].map(k =>
+    `<div class="card"><span class="pill ${k}">${k}</span><b>${(d.counts[k] || 0).toLocaleString()}</b></div>`).join("");
+
+  rows($("threads"), d.threads || [], t => `<tr>
+      <td class="muted">${esc(t.Status)}</td><td><code>${esc(base(t.FilePath) || t.FileName)}</code></td>
+      <td class="muted">${t.BytesTotal ? gb(t.BytesUploaded) + " / " + gb(t.BytesTotal) : ""}</td></tr>`);
+
+  $("failCount").textContent = (d.failures || []).length ? `(${d.failures.length})` : "";
+  rows($("failures"), (d.failures || []).slice(-50).reverse(), r => `<tr>
+      <td><code>${esc(r.path)}</code></td><td class="err">${esc(r.detail)}</td></tr>`);
+
+  rows($("recent"), (d.recent || []).slice(-40).reverse(), r => `<tr>
+      <td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td>
+      <td><code>${esc(base(r.path))}</code></td>
+      <td class="muted"><code>${esc(r.status === "uploaded" ? r.detail : r.detail.slice(0, 80))}</code></td></tr>`);
+
+  setTimeout(poll, d.finished ? 10000 : 2000);
+}
+poll();
+</script>
+</body>
+</html>
