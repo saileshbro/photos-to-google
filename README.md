@@ -11,6 +11,14 @@ ptg auth login --clipboard        # once, after copying the oauth_token cookie
 ptg upload ~/Pictures/export -r
 ```
 
+> [!WARNING]
+> This talks to Google's private, undocumented Photos endpoints with
+> Android-style credentials. It is not affiliated with or endorsed by Google,
+> and the integration may stop working at any time. Uploads may also be
+> reclassified or charged against your storage later, and an account can be
+> restricted for using an unofficial client. Treat it as experimental, keep a
+> copy of anything you upload, and use it at your own risk.
+
 ## The output contract
 
 Everything an agent needs is on stdout, one record per line. Progress, warnings
@@ -135,3 +143,8 @@ one.
 
 Go 1.27 to build. `ptg photos export` needs osxphotos and exiftool; nothing else
 does.
+
+## Licence
+
+MIT, see `LICENSE`. The vendored upload core is MIT from
+[xob0t/gotohp](https://github.com/xob0t/gotohp); see `NOTICE`.
