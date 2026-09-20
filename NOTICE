@@ -1,0 +1,8 @@
+ptg bundles source from gotohp (https://github.com/xob0t/gotohp), MIT licensed,
+Copyright (c) 2024 xob0t. The full licence text is in internal/gotohp/LICENSE.
+
+Vendored from commit 97a5dc0 ("refactor(core): extract reusable Go backend
+library", #109), because gotohp declares `module app` and so cannot be imported
+by path. Only the import paths of the `generated` package were rewritten; the
+code is otherwise unchanged. `core/` implements the Google Photos mobile upload
+protocol, including Live Photo pairing.
