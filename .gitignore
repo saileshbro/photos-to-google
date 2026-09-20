@@ -1,0 +1,9 @@
+# never commit Google credentials or run state
+auth_data
+gotohp.config
+*.log
+results/
+state-*.json
+plan.json
+pause.json
+items.json

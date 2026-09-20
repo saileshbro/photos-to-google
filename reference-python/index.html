@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mac Photos → Google Photos</title>
+<style>
+  :root { color-scheme: light dark; --ok:#2e9d57; --bad:#d64545; --run:#2f7de1; --wait:#999; --line:#8883; }
+  body { font: 14px/1.4 -apple-system, system-ui, sans-serif; margin: 24px; max-width: 1200px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .muted { color: #888; }
+  .cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; min-width: 110px; cursor: pointer; }
+  .card.sel { outline: 2px solid var(--run); }
+  .card b { display: block; font-size: 22px; }
+  .bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin: 4px 0 12px; }
+  .bar i { display: block; height: 100%; background: var(--run); transition: width .5s; }
+  .bar.ok i { background: var(--ok); }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .pill { border-radius: 9px; padding: 1px 8px; font-size: 12px; color: #fff; white-space: nowrap; }
+  .done { background: var(--ok); } .failed { background: var(--bad); } .uploading { background: var(--run); }
+  .exported, .pending { background: #777; } .not-exported { background: #bbb; color: #333; }
+  .tag { font-size: 11px; border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; margin-right: 3px; }
+  .file { font-size: 12px; } .file a { color: var(--run); } .err { color: var(--bad); }
+  #state { padding: 8px 12px; border-radius: 8px; background: #8881; margin-top: 8px; }
+  input { font: inherit; padding: 5px 8px; width: 260px; }
+</style>
+</head>
+<body>
+<h1>Mac Photos library → Google Photos</h1>
+<div class="muted" id="sub">loading…</div>
+<div id="state"></div>
+
+<div style="margin-top:16px">Exported <span id="expTxt"></span></div>
+<div class="bar"><i id="expBar"></i></div>
+<div>Uploaded (items) <span id="upTxt"></span></div>
+<div class="bar ok"><i id="upBar"></i></div>
+<div>Uploaded (data) <span id="byTxt"></span></div>
+<div class="bar ok"><i id="byBar"></i></div>
+
+<div class="cards" id="cards"></div>
+<input id="q" placeholder="Search filename or date…">
+<span class="muted" id="shown"></span>
+<table><thead><tr><th>Date</th><th>Item</th><th>Status</th><th>Files → Google Photos</th></tr></thead><tbody id="rows"></tbody></table>
+
+<script>
+const ORDER = ["uploading", "failed", "exported", "done", "not exported"];
+let filter = "uploading", data = null, hist = [];
+const $ = id => document.getElementById(id);
+const gb = b => (b / 1e9).toFixed(1) + " GB";
+const pct = (a, b) => b ? (100 * a / b) : 0;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function render() {
+  if (!data) return;
+  const c = data.counts, total = data.total, st = data.state || {};
+  const exported = total - (c["not exported"] || 0), done = c.done || 0;
+  $("expTxt").textContent = `${exported.toLocaleString()} / ${total.toLocaleString()} items`;
+  $("expBar").style.width = pct(exported, total) + "%";
+  $("upTxt").textContent = `${done.toLocaleString()} / ${total.toLocaleString()} items (${pct(done, total).toFixed(1)}%)`;
+  $("upBar").style.width = pct(done, total) + "%";
+  hist.push([data.now, data.bytes_done]); hist = hist.filter(h => data.now - h[0] < 600);
+  const rate = hist.length > 1 ? (hist.at(-1)[1] - hist[0][1]) / (hist.at(-1)[0] - hist[0][0]) : 0;
+  const left = data.bytes_total - data.bytes_done;
+  const eta = rate > 0 ? `${(left / rate / 3600).toFixed(1)} h left at ${(rate / 1e6).toFixed(1)} MB/s` : "";
+  $("byTxt").textContent = `${gb(data.bytes_done)} / ${gb(data.bytes_total)} ${eta ? "· " + eta : ""}`;
+  $("byBar").style.width = pct(data.bytes_done, data.bytes_total) + "%";
+
+  let s = `Phase: <b>${esc(st.phase || "idle")}</b>`;
+  if (st.batch_index) s += ` · batch ${st.batch_index} / ${st.batches} (pass ${st.attempt})`;
+  if (st.phase === "backoff") s += ` · paused ${Math.max(0, Math.round(st.until - data.now))} s (Google rate limit or failures)`;
+  if (st.last_error) s += `<div class="err">Last error: ${esc(st.last_error)}</div>`;
+  if (st.reason) s += `<div class="err">${esc(st.reason)}</div>`;
+  $("state").innerHTML = s;
+  $("sub").textContent = `Updated ${new Date(data.now * 1000).toLocaleTimeString()}`;
+
+  $("cards").innerHTML = ORDER.map(k => `<div class="card ${k === filter ? "sel" : ""}" data-k="${k}">
+      <span class="pill ${k.replace(" ", "-")}">${k}</span><b>${(c[k] || 0).toLocaleString()}</b></div>`).join("")
+    + `<div class="card ${filter === "all" ? "sel" : ""}" data-k="all">all<b>${total.toLocaleString()}</b></div>`;
+  document.querySelectorAll(".card").forEach(el => el.onclick = () => { filter = el.dataset.k; render(); });
+
+  const q = $("q").value.toLowerCase();
+  let list = data.items.filter(it => (filter === "all" || it.s === filter)
+    && (!q || it.n.toLowerCase().includes(q) || it.d.includes(q)));
+  if (filter === "done") list = list.slice().reverse();
+  $("shown").textContent = `${list.length.toLocaleString()} match · showing first ${Math.min(300, list.length)}`;
+  $("rows").innerHTML = list.slice(0, 300).map(it => `<tr>
+      <td class="muted">${esc(it.d)}</td>
+      <td>${esc(it.n)}<br>${it.l ? '<span class="tag">Live</span>' : ""}${it.e ? '<span class="tag">Edited</span>' : ""}${it.v ? '<span class="tag">Video</span>' : ""}</td>
+      <td><span class="pill ${it.s.replace(" ", "-")}">${it.s}</span></td>
+      <td>${it.f.map(([n, s, x]) => `<div class="file">${s === "done" ? "✓" : s === "failed" ? "✗" : "·"} ${
+        s === "done" ? `<a href="https://photos.google.com/photo/${encodeURIComponent(x)}" target="_blank">${esc(n)}</a>` : esc(n)}${
+        s === "failed" ? ` <span class="err">${esc(x)}</span>` : ""}</div>`).join("")}</td></tr>`).join("");
+}
+
+async function poll() {
+  try { data = await (await fetch("/progress.json", {cache: "no-store"})).json(); render(); }
+  catch (e) { $("sub").textContent = "Server not reachable: " + e; }
+  setTimeout(poll, 4000);
+}
+$("q").oninput = render;
+poll();
+</script>
+</body>
+</html>
