@@ -176,6 +176,9 @@ This runs osxphotos (uv tool install osxphotos) and exiftool
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := args[0]
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return usageErrorf("cannot create %s: %v", dir, err)
+			}
 			bin, err := exec.LookPath("osxphotos")
 			if err != nil {
 				return usageErrorf("osxphotos is not installed: run `uv tool install osxphotos` (or pip install osxphotos)")
